@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Trash2, GripVertical, X, Eye } from "lucide-react";
+import { Plus, Trash2, GripVertical, X, Eye, Pencil } from "lucide-react";
 import BlockEditor from "./BlockEditor";
 import ContentPreview from "./ContentPreview";
 import type { ContentBlock } from "@/types";
@@ -15,6 +15,7 @@ import type { AIDraft } from "./AIDraftPanel";
 interface ContentFormProps {
   initial: AIDraft | null;
   onSave: (data: SavePayload) => void;
+  onCancel: () => void;
   saving: boolean;
 }
 
@@ -122,7 +123,7 @@ function initFromDraft(draft: AIDraft | null): FormValues {
   };
 }
 
-export default function ContentForm({ initial, onSave, saving }: ContentFormProps) {
+export default function ContentForm({ initial, onSave, onCancel, saving }: ContentFormProps) {
   const [type, setType] = useState<ContentType>("story");
   const [values, setValues] = useState<FormValues>({});
   const [useCustomSlug, setUseCustomSlug] = useState(false);
@@ -565,10 +566,36 @@ export default function ContentForm({ initial, onSave, saving }: ContentFormProp
   // Preview mode replaces the whole editor surface with the rendered page.
   if (mode === "preview") {
     return (
-      <ContentPreview
-        draft={previewDraft}
-        onBack={() => setMode("edit")}
-      />
+      <div className="space-y-xl">
+        {/* Sticky save bar : preview is the final check, so saving must
+            not require a round trip back through edit fields. */}
+        <div className="sticky top-0 z-20 bg-surface/95 backdrop-blur border border-border-default px-md py-sm flex flex-wrap items-center justify-between gap-md">
+          <div className="flex items-center gap-md">
+            <button
+              onClick={() => setMode("edit")}
+              className="inline-flex items-center gap-sm px-xl py-md bg-surface border border-border-default text-on-surface font-sora text-label-caps uppercase tracking-widest hover:border-primary transition-colors"
+            >
+              <Pencil className="w-4 h-4" />
+              Back to Edit
+            </button>
+            <span className="hidden md:inline font-sora text-xs text-on-surface-muted">
+              {status === "published" ? "Will save &amp; publish" : "Will save as private"}
+            </span>
+          </div>
+          <button
+            onClick={handleSave}
+            disabled={saving || !title || !slug}
+            className="px-xl py-md bg-primary text-on-primary font-sora text-label-caps uppercase tracking-widest hover:bg-primary-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {saving ? "Saving..." : status === "published" ? "Publish" : "Save Private"}
+          </button>
+        </div>
+
+        <ContentPreview
+          draft={previewDraft}
+          onBack={() => setMode("edit")}
+        />
+      </div>
     );
   }
 
@@ -980,11 +1007,19 @@ export default function ContentForm({ initial, onSave, saving }: ContentFormProp
       {/* Save — at the bottom after all fields */}
       <div className="flex items-center gap-md">
         <button
+          type="button"
           onClick={handleSave}
           disabled={saving || !title || !slug}
           className="px-xl py-md bg-primary text-on-primary font-sora text-label-caps uppercase tracking-widest hover:bg-primary-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? "Saving..." : status === "published" ? "Publish" : "Save Private"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-xl py-md bg-surface border border-border-default text-on-surface font-sora text-label-caps uppercase tracking-widest hover:border-primary transition-colors"
+        >
+          Cancel
         </button>
       </div>
     </div>

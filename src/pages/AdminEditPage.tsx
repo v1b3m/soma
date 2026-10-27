@@ -302,7 +302,12 @@ export default function AdminEditPage() {
         </div>
       ) : draft ? (
         <section className="p-xl bg-surface border border-border-default">
-          <ContentForm initial={draft} onSave={handleSave} saving={saving} />
+          <ContentForm
+              initial={draft}
+              onSave={handleSave}
+              onCancel={() => navigate(-1)}
+              saving={saving}
+            />
         </section>
       ) : null}
     </div>
