@@ -1,9 +1,11 @@
 import { useParams, Link } from "react-router-dom";
-import { ArrowRight, Clock, Layers, Check, Printer, Loader2 } from "lucide-react";
+import { ArrowRight, Clock, Layers, Check, Printer, Edit3 } from "lucide-react";
+import { SkeletonCollectionDetail } from "@/components/ui/Skeleton";
 import Tooltip from "@/components/ui/Tooltip";
 import AccentBar from "@/components/ui/AccentBar";
 import Tag from "@/components/ui/Tag";
 import { useContentItem, useContentList } from "@/lib/content";
+import { useAuth } from "@/lib/AuthContext";
 import type { SeriesContent, StoryContent } from "@/types";
 import { useProgress } from "@/lib/useProgress";
 import { getTotalReadingTime } from "@/lib/readingTime";
@@ -18,7 +20,8 @@ export default function SeriesDetailPage() {
   const { data: stories } = useContentList<StoryContent>("story");
   const allStories = stories ?? [];
   const episodeSlugs = series ? series.episodes.map((e) => e.storySlug) : [];
-  const { isCompleted, toggle, progress } = useProgress(slug ?? "", episodeSlugs);
+  const { isOwner } = useAuth();
+const { isCompleted, toggle, progress } = useProgress(slug ?? "", episodeSlugs);
   usePageMeta({ title: series?.title, description: series?.description, image: series?.image });
   const totalMinutes = series
     ? getTotalReadingTime(series.episodes.map((e) => e.storySlug), allStories)
@@ -26,9 +29,7 @@ export default function SeriesDetailPage() {
 
   if (loading) {
     return (
-      <div className="max-w-readme mx-auto px-gutter md:px-margin-desktop py-giant text-center">
-        <Loader2 className="w-6 h-6 mx-auto animate-spin text-on-surface-muted" />
-      </div>
+      <SkeletonCollectionDetail rows={4} />
     );
   }
 
@@ -73,6 +74,18 @@ export default function SeriesDetailPage() {
             <span>{progress}/{series.episodes.length} completed</span>
             <span className="text-secondary">//</span>
             <span>~{totalMinutes} min</span>
+            {isOwner && (
+              <>
+                <span className="text-secondary">//</span>
+                <Link to={`/admin/series/${series.slug}/edit`}
+                  className="inline-flex items-center gap-sm font-sora bg-primary text-on-primary border-primary hover:bg-primary-hover transition-all shadow-sm rounded-lg font-semibold px-md py-sm text-xs"
+                  title="Edit series"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>Edit</span>
+                </Link>
+              </>
+            )}
           </div>
           <div className="mt-lg w-full max-w-md h-1 bg-surface-container rounded-full overflow-hidden">
             <div

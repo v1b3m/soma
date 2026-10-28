@@ -5,7 +5,8 @@ import SidebarToc from "@/components/sections/SidebarToc";
 import ContentBlocks from "@/components/ui/ContentBlocks";
 import ShareButtons from "@/components/ui/ShareButtons";
 import PrintButton from "@/components/ui/PrintButton";
-import { Loader2 } from "lucide-react";
+import { SkeletonDocLayout } from "@/components/ui/Skeleton";
+import { Edit3 } from "lucide-react";
 import { useContentItem } from "@/lib/content";
 import type { DocContent, TocItem } from "@/types";
 import { md, contentToMarkdown } from "@/lib/markdown";
@@ -21,9 +22,7 @@ export default function DocPage() {
 
   if (loading) {
     return (
-      <div className="max-w-readme mx-auto px-gutter md:px-margin-desktop py-giant text-center">
-        <Loader2 className="w-6 h-6 mx-auto animate-spin text-on-surface-muted" />
-      </div>
+      <SkeletonDocLayout />
     );
   }
 
@@ -71,7 +70,18 @@ export default function DocPage() {
               <span className="font-sora text-label-caps text-on-surface">{doc.author.name}</span>
               <span className="font-sora text-metadata-tag text-on-surface-muted">{doc.date}</span>
               <div className="mt-sm flex lg:justify-end">
-                <PrintButton to={`/docs/${slug}/print`} compact />
+                <div className="flex items-center gap-sm">
+                  <PrintButton to={`/docs/${slug}/print`} compact />
+                  {isOwner && (
+                    <Link to={`/admin/doc/${slug}/edit`}
+                      className="print:hidden inline-flex items-center gap-sm font-sora bg-primary text-on-primary border-primary hover:bg-primary-hover transition-all shadow-sm rounded-lg font-semibold px-md py-sm text-xs"
+                      title="Edit doc"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      Edit
+                    </Link>
+                  )}
+                </div>
               </div>
             </div>
           </div>

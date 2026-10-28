@@ -49,14 +49,22 @@ function renderEntry(entry: string | object): string {
 export default function ContentPreview({ draft, onBack }: ContentPreviewProps) {
   const body = useMemo(() => {
     const parts = (draft.body ?? []).slice(0, 4);
-    return parts.length > 0 ? parts.map((p) => mdBlock(p)).join("") : "";
+    return parts.length > 0 ? parts.map((p) => mdBlock(p)).join('<div class="h-4"></div>') : "";
   }, [draft.body]);
 
   const sections = useMemo(
-    () => (draft.sections ?? []).map((s) => ({
-      heading: s.heading,
-      html: (s.paragraphs ?? []).map(renderEntry).join(""),
-    })),
+    () => (draft.sections ?? []).slice(0, 20).map((s) => {
+      // Batch all paragraphs into one mdBlock call instead of per-paragraph,
+      // which avoids hundreds of marked.parse + hljs invocations in large content.
+      const combined = (s.paragraphs ?? [])
+        .map((p) => (typeof p === "string" ? p : ""))
+        .filter(Boolean)
+        .join("\n\n");
+      return {
+        heading: s.heading,
+        html: combined ? mdBlock(combined) : "",
+      };
+    }),
     [draft.sections],
   );
 
@@ -89,8 +97,8 @@ export default function ContentPreview({ draft, onBack }: ContentPreviewProps) {
         )}
       </div>
 
-      {/* Page body */}
-      <div className="max-h-[70vh] overflow-y-auto p-xl md:p-xxl">
+      {/* Page body — no inner scroll container: page scrolls naturally */}
+      <div className="p-xl md:p-xxl">
         <div className="w-full h-1 bg-gradient-to-r from-primary to-secondary mb-lg" />
         <p className="font-sora text-metadata-tag text-secondary uppercase tracking-widest mb-sm">
           {draft.category || "CATEGORY"}
@@ -116,7 +124,7 @@ export default function ContentPreview({ draft, onBack }: ContentPreviewProps) {
           </span>
         </div>
 
-        {/* Intro */}
+        {/* Intro (shown in both layouts) */}
         {draft.intro && (
           <div
             className="preview-prose font-dm-sans text-body-base text-on-surface-variant mb-lg leading-relaxed"
@@ -132,20 +140,66 @@ export default function ContentPreview({ draft, onBack }: ContentPreviewProps) {
           />
         )}
 
-        {/* Sections */}
-        {sections.map((s, i) => (
-          <section key={i} className="mb-lg">
-            <h2 className="font-sora text-article-title text-on-surface mb-md">
-              {s.heading || `Section ${i + 1}`}
-            </h2>
-            <div
-              className="preview-prose font-dm-sans text-body-base text-on-surface-variant leading-relaxed"
-              dangerouslySetInnerHTML={{ __html: s.html }}
-            />
-          </section>
-        ))}
+        {/* Bento highlights — rendered between body and sections (matches StoryPage/GuidePage) */}
+        {sections.length > 0 && (draft.bentoHighlights ?? []).length > 0 && (
+          <div className="mb-lg grid grid-cols-1 sm:grid-cols-3 gap-md">
+            {(draft.bentoHighlights ?? []).map((b, i) => (
+              <div key={i} className="p-md bg-surface-container-low border border-border-default rounded-lg">
+                <p className="font-sora text-[10px] font-bold text-primary uppercase tracking-widest mb-xs">{b.label}</p>
+                <p className="font-sora text-sm font-semibold text-on-surface mb-xs">{b.title}</p>
+                <p className="font-dm-sans text-xs text-on-surface-variant">{b.description}</p>
+              </div>
+            ))}
+          </div>
+        )}
 
-        {/* Doc Q&A sections */}
+        {/* Sections with interspersed pull quotes (quote i-1 before section i) */}
+        {sections.length > 0 && (
+          <>
+            {sections.map((s, i) => {
+              const quoteBefore =
+                (draft.pullQuotes ?? []).length > 0 && i > 0
+                  ? draft.pullQuotes[i - 1]
+                  : null;
+
+              return (
+                <section key={i} className="mb-lg">
+                  {quoteBefore && (
+                    <blockquote className="border-l-4 border-primary pl-md italic font-dm-sans text-body-base text-on-surface-variant mb-lg">
+                      <p>{quoteBefore.quote}</p>
+                      {quoteBefore.attribution && (
+                        <footer className="font-sora text-xs text-on-surface-muted mt-xs">— {quoteBefore.attribution}</footer>
+                      )}
+                    </blockquote>
+                  )}
+                  <h2 className="font-sora text-article-title text-on-surface mb-md">
+                    {s.heading || `Section ${i + 1}`}
+                  </h2>
+                  <div
+                    className="preview-prose font-dm-sans text-body-base text-on-surface-variant leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: s.html }}
+                  />
+                </section>
+              );
+            })}
+
+            {/* Remaining pull quotes after last section */}
+            {(draft.pullQuotes ?? []).length > sections.length - 1 && (
+              <div className="space-y-md">
+                {(draft.pullQuotes ?? []).slice(sections.length - 1).map((q, i) => (
+                  <blockquote key={i} className="border-l-4 border-primary pl-md italic font-dm-sans text-body-base text-on-surface-variant">
+                    <p>{q.quote}</p>
+                    {q.attribution && (
+                      <footer className="font-sora text-xs text-on-surface-muted mt-xs">— {q.attribution}</footer>
+                    )}
+                  </blockquote>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Doc Q&A sections — only when no story sections (docs page) */}
         {docSections.map((s, i) => (
           <section key={i} className="mb-lg">
             <h2 className="font-sora text-article-title text-on-surface mb-md">
@@ -163,7 +217,7 @@ export default function ContentPreview({ draft, onBack }: ContentPreviewProps) {
           </section>
         ))}
 
-        {!draft.intro && !body && sections.length === 0 && docSections.length === 0 && (
+        {!draft.intro && !body && sections.length === 0 && docSections.length === 0 && (draft.pullQuotes ?? []).length === 0 && (draft.bentoHighlights ?? []).length === 0 && (draft.tipCards ?? []).length === 0 && (draft.references ?? []).length === 0 && (draft.tagline ?? "") === "" && (
           <p className="font-dm-sans text-sm text-on-surface-muted italic">
             Nothing to preview yet — fill in the intro and content above.
           </p>

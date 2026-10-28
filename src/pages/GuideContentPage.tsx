@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { useState, useRef } from "react";
-import { Minus, Terminal, UserCheck, AlertTriangle, Lightbulb, Shield, Zap, Loader2 } from "lucide-react";
+import { Minus, Terminal, UserCheck, AlertTriangle, Lightbulb, Shield, Zap } from "lucide-react";
+import { SkeletonDocLayout } from "@/components/ui/Skeleton";
 import AccentBar from "@/components/ui/AccentBar";
 import Tag from "@/components/ui/Tag";
 import PullQuote from "@/components/ui/PullQuote";
@@ -73,9 +74,7 @@ export default function GuideContentPage() {
 
   if (loading) {
     return (
-      <div className="max-w-readme mx-auto px-gutter md:px-margin-desktop py-giant text-center">
-        <Loader2 className="w-6 h-6 mx-auto animate-spin text-on-surface-muted" />
-      </div>
+      <SkeletonDocLayout />
     );
   }
 
@@ -122,7 +121,7 @@ export default function GuideContentPage() {
                 {isOwner && (
                   <Link
                     to={`/admin/guide/${slug}/edit`}
-                    className="inline-flex items-center gap-xs px-sm py-sm text-xs font-sora text-on-surface-muted hover:text-primary border border-border-default hover:border-primary/50 transition-colors print:hidden"
+                    className="print:hidden inline-flex items-center gap-sm font-sora bg-primary text-on-primary border-primary hover:bg-primary-hover transition-all shadow-sm rounded-lg font-semibold px-md py-sm text-xs"
                     title="Edit guide"
                   >
                     <Edit3 className="w-3.5 h-3.5" />

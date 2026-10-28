@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Plus, Loader2, Eye, EyeOff, Search, Pencil, Trash2, Globe } from "lucide-react";
+import { Plus, Eye, EyeOff, Search, Pencil, Trash2, Globe } from "lucide-react";
+import { SkeletonAdminRows } from "@/components/ui/Skeleton";
 import AccentBar from "@/components/ui/AccentBar";
 import LocalAgentPanel from "@/components/admin/LocalAgentPanel";
 import { usePageMeta } from "@/hooks/usePageMeta";
+import { invalidateContentCache } from "@/lib/content";
 import { CONTENT_TYPES, CONTENT_TYPE_LABELS, ROUTE_BASE, type ContentType } from "@/lib/admin-prompts";
 
 interface ContentItem {
@@ -111,6 +113,7 @@ export default function AdminDashboardPage() {
         }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      invalidateContentCache();
       const rows = (data || []).map((it) =>
         it.slug === item.slug ? { ...it, status: next } : it
       );
@@ -133,6 +136,7 @@ export default function AdminDashboardPage() {
         headers: { "Content-Type": "application/json" },
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      invalidateContentCache();
       setData((data || []).filter((it) => it.slug !== item.slug));
     } catch (err) {
       setError(`Delete failed: ${err instanceof Error ? err.message : "unknown"}`);
@@ -221,8 +225,8 @@ export default function AdminDashboardPage() {
 
       {/* Content Table */}
       {loading ? (
-        <div className="flex items-center justify-center py-xxl">
-          <Loader2 className="w-6 h-6 animate-spin text-on-surface-muted" />
+        <div className="py-xl">
+          <SkeletonAdminRows rows={5} />
         </div>
       ) : error ? (
         <div className="p-lg bg-surface-container border border-border-default border-l-4 border-l-error">

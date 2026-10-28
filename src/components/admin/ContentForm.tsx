@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Trash2, GripVertical, X, Eye, Pencil } from "lucide-react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Plus, Trash2, GripVertical, X, Eye, Pencil, AlertTriangle } from "lucide-react";
 import BlockEditor from "./BlockEditor";
 import ContentPreview from "./ContentPreview";
 import type { ContentBlock } from "@/types";
@@ -12,6 +12,7 @@ import {
 } from "@/lib/admin-prompts";
 import type { AIDraft } from "./AIDraftPanel";
 import TestEditor from "./TestEditor";
+import AIEditPanel from "./AIEditPanel";
 
 interface ContentFormProps {
   initial: AIDraft | null;
@@ -124,6 +125,52 @@ function initFromDraft(draft: AIDraft | null): FormValues {
   };
 }
 
+/**
+ * Merge a partial AIDraft returned by an AI edit into the current form values.
+ * Only fields present in `draft` are updated; everything else keeps its value.
+ * This is the same shape mapping as initFromDraft but non-destructive.
+ */
+function mergeDraft(current: FormValues, draft: Record<string, unknown>): FormValues {
+  const next = { ...current };
+  if (typeof draft.title === "string") next.title = draft.title;
+  if (typeof draft.excerpt === "string") next.excerpt = draft.excerpt;
+  if (typeof draft.category === "string") next.category = draft.category;
+  if (draft.author && typeof draft.author === "object") {
+    const a = draft.author as Record<string, unknown>;
+    if (typeof a.name === "string") next.authorName = a.name;
+    if (typeof a.handle === "string") next.authorHandle = a.handle;
+  }
+  if (typeof draft.date === "string") next.date = draft.date;
+  if (typeof draft.image === "string") next.image = draft.image;
+  if (typeof draft.imageAlt === "string") next.imageAlt = draft.imageAlt;
+  if (Array.isArray(draft.tags)) next.tagsText = draft.tags.join(", ");
+  if (Array.isArray(draft.topics)) next.topics = draft.topics;
+  if (typeof draft.intro === "string") next.intro = draft.intro;
+  if (Array.isArray(draft.body)) next.body = [...draft.body];
+  if (Array.isArray(draft.sections)) next.sections = draft.sections;
+  if (Array.isArray(draft.pullQuotes)) next.pullQuotes = draft.pullQuotes;
+  if (Array.isArray(draft.bentoHighlights)) next.bentoHighlights = draft.bentoHighlights;
+  if (Array.isArray(draft.references)) next.references = draft.references;
+  if (Array.isArray(draft.tipCards)) next.tipCards = draft.tipCards;
+  if (typeof draft.tagline === "string") next.tagline = draft.tagline;
+  if (typeof draft.format === "string") next.format = draft.format;
+  if (typeof draft.estimatedMinutes === "number") next.estimatedMinutes = draft.estimatedMinutes;
+  if (typeof draft.passingScore === "number") next.passingScore = draft.passingScore;
+  if (Array.isArray(draft.lessons)) next.lessons = draft.lessons;
+  if (Array.isArray(draft.chapters)) next.chapters = draft.chapters;
+  if (Array.isArray(draft.episodes)) next.episodes = draft.episodes;
+  if (Array.isArray(draft.docSections)) next.docSections = draft.docSections;
+  if (Array.isArray(draft.sources)) next.sources = draft.sources;
+  if (Array.isArray(draft.questions)) next.questions = draft.questions;
+  if (typeof draft.episode === "string") next.episode = draft.episode;
+  if (typeof draft.duration === "string") next.duration = draft.duration;
+  if (typeof draft.summary === "string") next.summary = draft.summary;
+  if (Array.isArray(draft.segments)) next.segments = draft.segments;
+  if (Array.isArray(draft.guests)) next.guests = draft.guests;
+  if (Array.isArray(draft.relatedReading)) next.relatedReading = draft.relatedReading;
+  return next;
+}
+
 export default function ContentForm({ initial, onSave, onCancel, saving }: ContentFormProps) {
   const [type, setType] = useState<ContentType>("story");
   const [values, setValues] = useState<FormValues>({});
@@ -132,6 +179,7 @@ export default function ContentForm({ initial, onSave, onCancel, saving }: Conte
   const [status, setStatus] = useState<"private" | "published">("private");
   const [reasoning, setReasoning] = useState("");
   const [mode, setMode] = useState<"edit" | "preview">("edit");
+  const [aiEdited, setAiEdited] = useState(false);
   // Shared drag state for array editors (sections, items, etc.)
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const dragToRef = useRef<number | null>(null);
@@ -225,6 +273,7 @@ export default function ContentForm({ initial, onSave, onCancel, saving }: Conte
     const tags = tagsText.split(",").map((t) => t.trim()).filter(Boolean);
     const topicsRaw = values.topics;
     const topics = strArray(topicsRaw).filter(Boolean);
+    setAiEdited(false);
 
     onSave({
       slug,
@@ -244,7 +293,7 @@ export default function ContentForm({ initial, onSave, onCancel, saving }: Conte
   };
 
   // Live preview: mirror the current form state back into a draft shape.
-  const previewDraft: AIDraft = {
+  const previewDraft: AIDraft = useMemo(() => ({
     type,
     reasoning: "",
     title: str(values.title),
@@ -252,7 +301,12 @@ export default function ContentForm({ initial, onSave, onCancel, saving }: Conte
     category: str(values.category),
     author: { name: str(values.authorName), handle: str(values.authorHandle) || undefined },
     date: str(values.date),
+    image: str(values.image),
+    imageAlt: str(values.imageAlt),
+    tags: (() => { const t = str(values.tagsText); return t ? t.split(",").map((s) => s.trim()).filter(Boolean) : []; })(),
+    topics: strArray(values.topics),
     intro: str(values.intro),
+    tagline: str(values.tagline),
     body: strArray(values.body),
     sections: type === "doc" ? [] : recordArray(values.sections).map((s) => ({
       heading: str(s.heading),
@@ -267,12 +321,25 @@ export default function ContentForm({ initial, onSave, onCancel, saving }: Conte
         answer: blockArray(item.answer),
       })),
     })) : [],
-    episodes: recordArray(values.episodes).map((e) => ({
-      title: str(e.title),
-      storySlug: str(e.storySlug),
-      description: str(e.description) || undefined,
-    })),
-  };
+    pullQuotes: recordArray(values.pullQuotes),
+    bentoHighlights: recordArray(values.bentoHighlights),
+    references: recordArray(values.references),
+    tipCards: recordArray(values.tipCards),
+    lessons: type === "course" ? recordArray(values.lessons) : undefined,
+    chapters: type === "book" ? recordArray(values.chapters) : undefined,
+    episodes: recordArray(values.episodes),
+    format: str(values.format) as "written" | "oral" | "hybrid" | undefined,
+    estimatedMinutes: typeof values.estimatedMinutes === "number" ? values.estimatedMinutes : undefined,
+    passingScore: typeof values.passingScore === "number" ? values.passingScore : undefined,
+    sources: recordArray(values.sources),
+    questions: recordArray(values.questions),
+    episode: str(values.episode),
+    duration: str(values.duration),
+    summary: str(values.summary),
+    segments: recordArray(values.segments),
+    guests: recordArray(values.guests),
+    relatedReading: recordArray(values.relatedReading),
+  }), [values, type]);
 
   // ── Schema-driven field renderers ──
 
@@ -602,6 +669,25 @@ export default function ContentForm({ initial, onSave, onCancel, saving }: Conte
 
   return (
     <div className="space-y-xl">
+      {/* AI Edit — modifies current content via LLM. Applies to the form;
+          persistence requires the explicit Save button below. */}
+      <AIEditPanel
+        currentJson={JSON.stringify(previewDraft)}
+        onUpdate={(partial) => {
+          setValues(mergeDraft(values, partial));
+          setAiEdited(true);
+        }}
+      />
+      {aiEdited && (
+        <div className="flex items-center gap-2 p-sm bg-accent-orange/10 border border-accent-orange/40 rounded text-xs font-dm-sans text-on-surface">
+          <AlertTriangle className="w-3.5 h-3.5 text-accent-orange shrink-0" />
+          <span>
+            AI edits applied to the form. <strong>Save below</strong> (or Preview &rarr; save) to persist them — the published page
+            still shows the previous version until you save.
+          </span>
+        </div>
+      )}
+
       {/* Preview — above all fields so clicking it sees content from the top */}
       <div className="flex items-center gap-md">
         <button

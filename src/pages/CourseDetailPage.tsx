@@ -1,9 +1,11 @@
 import { useParams, Link } from "react-router-dom";
-import { ArrowRight, Clock, BookOpen, Check, ExternalLink, Sparkles, Printer, Loader2 } from "lucide-react";
+import { ArrowRight, Clock, BookOpen, Check, ExternalLink, Sparkles, Printer, Edit3 } from "lucide-react";
+import { SkeletonCollectionDetail } from "@/components/ui/Skeleton";
 import Tooltip from "@/components/ui/Tooltip";
 import AccentBar from "@/components/ui/AccentBar";
 import Tag from "@/components/ui/Tag";
 import { useContentItem, useContentList } from "@/lib/content";
+import { useAuth } from "@/lib/AuthContext";
 import type { CourseContent, StoryContent, TestContent } from "@/types";
 import { useProgress } from "@/lib/useProgress";
 import { getTotalReadingTime } from "@/lib/readingTime";
@@ -20,7 +22,8 @@ export default function CourseDetailPage() {
   const allStories = stories ?? [];
   const allTests = tests ?? [];
   const lessonSlugs = course ? course.lessons.map((l) => l.storySlug) : [];
-  const { isCompleted, toggle, progress } = useProgress(slug ?? "", lessonSlugs);
+  const { isOwner } = useAuth();
+const { isCompleted, toggle, progress } = useProgress(slug ?? "", lessonSlugs);
   const totalMinutes = course
     ? getTotalReadingTime(course.lessons.map((l) => l.storySlug), allStories)
     : 0;
@@ -28,9 +31,7 @@ export default function CourseDetailPage() {
 
   if (loading) {
     return (
-      <div className="max-w-readme mx-auto px-gutter md:px-margin-desktop py-giant text-center">
-        <Loader2 className="w-6 h-6 mx-auto animate-spin text-on-surface-muted" />
-      </div>
+      <SkeletonCollectionDetail rows={4} />
     );
   }
 
@@ -74,6 +75,18 @@ export default function CourseDetailPage() {
             <span>{progress}/{course.lessons.length} completed</span>
             <span className="text-secondary">//</span>
             <span>~{totalMinutes} min</span>
+            {isOwner && (
+              <>
+                <span className="text-secondary">//</span>
+                <Link to={`/admin/course/${course.slug}/edit`}
+                  className="inline-flex items-center gap-sm font-sora bg-primary text-on-primary border-primary hover:bg-primary-hover transition-all shadow-sm rounded-lg font-semibold px-md py-sm text-xs"
+                  title="Edit course"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>Edit</span>
+                </Link>
+              </>
+            )}
           </div>
           <div className="mt-lg w-full max-w-md h-1 bg-surface-container rounded-full overflow-hidden">
             <div

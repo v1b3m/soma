@@ -16,7 +16,8 @@ import { SectionHeader } from "@/components/ui/SectionHeader";
 import PrintButton from "@/components/ui/PrintButton";
 import { useContentItem, useContentList } from "@/lib/content";
 import type { StoryContent, CourseContent, BookContent, SeriesContent, TestContent } from "@/types";
-import { ArrowLeft, ArrowRight, ExternalLink, Check, Copy, Bookmark, Loader2, Trash2, Bot, PenLine, Eye, Send, X, ChevronDown, Reply, Maximize2, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, ExternalLink, Check, Copy, Bookmark, Loader2, Trash2, Bot, PenLine, Eye, Send, X, ChevronDown, Reply, Maximize2, Sparkles, Edit3 } from "lucide-react";
+import { SkeletonStoryLayout } from "@/components/ui/Skeleton";
 import { mdBlock, contentToMarkdown, md } from "@/lib/markdown";
 import MarkdownHtml from "@/components/ui/MarkdownHtml";
 import { useProgress } from "@/lib/useProgress";
@@ -972,9 +973,7 @@ ${story?.title ? `Title: ${story.title}\n` : ""}${articleExcerpt}
 
   if (storyLoading) {
     return (
-      <div className="max-w-readme mx-auto px-gutter md:px-margin-desktop py-giant text-center">
-        <Loader2 className="w-6 h-6 mx-auto animate-spin text-on-surface-muted" />
-      </div>
+      <SkeletonStoryLayout />
     );
   }
 
@@ -1026,6 +1025,15 @@ ${story?.title ? `Title: ${story.title}\n` : ""}${articleExcerpt}
                 <span className="text-on-surface-muted">{readingTime} min read</span>
                 <span className="text-on-surface-muted">//</span>
                 <PrintButton to={`${location.pathname}/print`} compact className="normal-case tracking-normal" />
+                {isOwner && (
+                  <Link to={`/admin/story/${slug}/edit`}
+                    className="print:hidden inline-flex items-center gap-sm font-sora bg-primary text-on-primary border-primary hover:bg-primary-hover transition-all shadow-sm rounded-lg font-semibold px-md py-sm text-xs"
+                    title="Edit content"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit</span>
+                  </Link>
+                )}
               </div>
             )}
             {story.source && (
@@ -1126,9 +1134,37 @@ ${story?.title ? `Title: ${story.title}\n` : ""}${articleExcerpt}
 
             {(story.intro || story.body.length > 0) ? (
               <>
+                {/* Intro (shown in both layouts) */}
+                {story.intro && (
+                  <div className="font-dm-sans text-body-base leading-relaxed text-on-surface mb-lg">
+                    <ContentBlocks
+                      blocks={[story.intro]}
+                      firstDropCap={true}
+                      highlights={highlights}
+                      onHighlightClick={handleHighlightClick}
+                      sectionRefs={sectionAnchors.refs}
+                      lessonLinks={lessonLinks}
+                    />
+                  </div>
+                )}
+
                 {/* Rich layout: sections + bento + multi pull quotes */}
                 {hasRichContent ? (
                   <>
+                    {/* Body (shown before bento in rich layout, merged as a single ContentBlocks block) */}
+                    {story.body.length > 0 && (
+                      <div className="font-dm-sans text-body-base leading-relaxed text-on-surface mb-lg">
+                        <ContentBlocks
+                          blocks={story.body}
+                          firstDropCap={false}
+                          highlights={highlights}
+                          onHighlightClick={handleHighlightClick}
+                          sectionRefs={sectionAnchors.refs}
+                          lessonLinks={lessonLinks}
+                        />
+                      </div>
+                    )}
+
                     {/* Bento Highlights */}
                     {hasBento && (
                       <div
@@ -1192,7 +1228,7 @@ ${story?.title ? `Title: ${story.title}\n` : ""}${articleExcerpt}
                   <>
                     <div className="font-dm-sans text-body-base leading-loose text-on-surface space-y-lg">
                       <ContentBlocks
-                        blocks={story.intro ? [story.intro, ...story.body] : story.body}
+                        blocks={story.body}
                         firstDropCap={true}
                         highlights={highlights}
                         onHighlightClick={handleHighlightClick}
