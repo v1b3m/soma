@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Plus, Trash2, GripVertical, X, Eye, Pencil, AlertTriangle } from "lucide-react";
 import BlockEditor from "./BlockEditor";
 import ContentPreview from "./ContentPreview";
+import CoverImagePicker from "./CoverImagePicker";
 import type { ContentBlock } from "@/types";
 import {
   CONTENT_TYPE_LABELS,
@@ -29,6 +30,7 @@ export interface SavePayload {
   category: string;
   author: { name: string; handle?: string };
   publishedAt: string;
+  updatedAt?: string;
   image?: string;
   imageAlt?: string;
   tags?: string[];
@@ -91,6 +93,7 @@ function initFromDraft(draft: AIDraft | null): FormValues {
   if (!draft) return {
     authorName: "Soma Editorial",
     publishedAt: now,
+    updatedAt: "",
   };
   return {
     title: draft.title || "",
@@ -98,7 +101,8 @@ function initFromDraft(draft: AIDraft | null): FormValues {
     category: draft.category || "Engineering",
     authorName: "Soma Editorial",               // AI never controls this
     authorHandle: "",                            // AI never controls this
-    publishedAt: draft.publishedAt || now,        // preserve for edits; fall back to now for new content
+    publishedAt: draft.publishedAt || now,        // AI stripped in create flow; preserved for edits
+    updatedAt: draft.updatedAt || "",
     image: draft.image || "",
     imageAlt: draft.imageAlt || "",
     tagsText: (draft.tags || []).join(", "),
@@ -282,6 +286,7 @@ export default function ContentForm({ initial, onSave, onCancel, saving }: Conte
       category: str(values.category),
       author: { name: str(values.authorName), handle: str(values.authorHandle) || undefined },
       publishedAt: str(values.publishedAt),
+      updatedAt: str(values.updatedAt) || undefined,
       image: str(values.image) || undefined,
       imageAlt: str(values.imageAlt) || undefined,
       tags: tags.length > 0 ? tags : undefined,
@@ -774,7 +779,7 @@ export default function ContentForm({ initial, onSave, onCancel, saving }: Conte
 
       {/* Schema-driven metadata fields */}
       {schema.fields
-        .filter((f) => ["title", "excerpt", "category", "author", "publishedAt", "image", "imageAlt", "tags", "topics", "tagline", "format", "estimatedMinutes", "passingScore", "episode", "duration", "summary"].includes(f.name))
+        .filter((f) => ["title", "excerpt", "category", "author", "publishedAt", "image", "tags", "topics", "tagline", "format", "estimatedMinutes", "passingScore", "episode", "duration", "summary"].includes(f.name))
         .map((f) => {
           // Special handling for fields that use sub-keys
           if (f.name === "author") {
@@ -803,17 +808,42 @@ export default function ContentForm({ initial, onSave, onCancel, saving }: Conte
             return renderField(f);
           }
           if (f.name === "publishedAt") {
-            const dateVal = str(values.publishedAt).split("T")[0];
+            const displayDate = str(values.publishedAt).split("T")[0];
+            const updatedVal = str(values.updatedAt).split("T")[0];
             return (
-              <div key="publishedAt">
-                <label className="font-sora text-sm text-on-surface block mb-xs">
-                  Date <span className="text-error ml-xs">*</span>
-                </label>
-                <input
-                  type="date"
-                  value={dateVal}
-                  onChange={(e) => setVal("publishedAt", `${e.target.value}T12:00:00.000Z`)}
-                  className="w-full p-md bg-surface border border-border-default text-on-surface font-dm-sans text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary cursor-pointer dark:[color-scheme:dark] dark:[&::-webkit-calendar-picker-indicator]:[filter:brightness(0)_invert(1)] [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+              <div key="publishedAt" className="space-y-sm">
+                <div className="flex items-center gap-md">
+                  <label className="font-sora text-sm text-on-surface block">
+                    Published
+                  </label>
+                  <span className="font-dm-sans text-sm text-on-surface-muted">
+                    {displayDate}
+                  </span>
+                </div>
+                <div>
+                  <label className="font-sora text-sm text-on-surface block mb-xs">
+                    Last updated
+                  </label>
+                  <input
+                    type="date"
+                    value={updatedVal}
+                    onChange={(e) => setVal("updatedAt", e.target.value ? `${e.target.value}T12:00:00.000Z` : "")}
+                    className="w-full p-md bg-surface border border-border-default text-on-surface font-dm-sans text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary cursor-pointer dark:[color-scheme:dark] dark:[&::-webkit-calendar-picker-indicator]:[filter:brightness(0)_invert(1)] [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                  />
+                </div>
+              </div>
+            );
+          }
+          if (f.name === "image") {
+            return (
+              <div key="image">
+                <CoverImagePicker
+                  image={str(values.image)}
+                  imageAlt={str(values.imageAlt)}
+                  onChange={(img, alt) => {
+                    setVal("image", img);
+                    setVal("imageAlt", alt);
+                  }}
                 />
               </div>
             );
