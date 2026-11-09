@@ -1,12 +1,105 @@
 import { isAuthed, requireAuth } from "./_auth.js";
 import { query as dbQuery, runPipeline, arg, isTursoConfigured } from "./_db.js";
 
-// Table is created idempotently on every request : no manual migration needed.
-// body_json holds the full content object as authored (same shape as the
-// registry entries, minus computed id/href). Top-level columns exist so
-// lists and visibility checks never parse JSON.
+// Modern migrations: always runs on boot, tracks _migrations table, skips applied.
+const MIGRATIONS = [
+  {
+    id: "001_content_items_composite_pk",
+    description: "Composite PK (type, slug) so story+featured can share slug",
+    up: async (q) => {
+      let sql = "";
+      try {
+        const rows = await q("SELECT sql FROM sqlite_master WHERE type='table' AND name='content_items'", []);
+        sql = rows[0]?.sql || rows[0]?.SQL || "";
+      } catch {}
+      if (!sql) {
+        await q(`CREATE TABLE IF NOT EXISTS content_items (
+          slug TEXT NOT NULL,
+          type TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'private',
+          title TEXT NOT NULL DEFAULT '',
+          excerpt TEXT NOT NULL DEFAULT '',
+          body_json TEXT NOT NULL,
+          meta_json TEXT NOT NULL DEFAULT '{}',
+          position INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT DEFAULT (datetime('now')),
+          archived_at TEXT,
+          PRIMARY KEY (type, slug)
+        )`, []);
+        return;
+      }
+      const upper = sql.toUpperCase();
+      const isLegacy = upper.includes("SLUG TEXT PRIMARY KEY") || !upper.includes("PRIMARY KEY (TYPE, SLUG)");
+      if (!isLegacy) return;
+      console.log("[migrate] 001 composite PK: migrating legacy slug PK -> (type,slug)");
+      await q(`CREATE TABLE IF NOT EXISTS content_items_new (
+        slug TEXT NOT NULL,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'private',
+        title TEXT NOT NULL DEFAULT '',
+        excerpt TEXT NOT NULL DEFAULT '',
+        body_json TEXT NOT NULL,
+        meta_json TEXT NOT NULL DEFAULT '{}',
+        position INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT DEFAULT (datetime('now')),
+        archived_at TEXT,
+        PRIMARY KEY (type, slug)
+      )`, []);
+      // Copy handling both 9-col (no archived_at) and 10-col variants
+      try {
+        await q(`INSERT OR REPLACE INTO content_items_new (slug, type, status, title, excerpt, body_json, meta_json, position, updated_at, archived_at)
+          SELECT slug, type, status, title, excerpt, body_json, meta_json, position, updated_at, archived_at FROM content_items`, []);
+      } catch {
+        try {
+          await q(`INSERT OR REPLACE INTO content_items_new (slug, type, status, title, excerpt, body_json, meta_json, position, updated_at)
+            SELECT slug, type, status, title, excerpt, body_json, meta_json, position, updated_at FROM content_items`, []);
+        } catch (e) {
+          console.error("[migrate] copy failed", e && e.message);
+        }
+      }
+      await q("DROP TABLE content_items", []);
+      await q("ALTER TABLE content_items_new RENAME TO content_items", []);
+      try { await q("DROP TABLE IF EXISTS content_fts", []); } catch {}
+    },
+  },
+];
+
+let _migrationsEnsured = false;
+async function runMigrations() {
+  if (_migrationsEnsured) return;
+  try {
+    await dbQuery(`CREATE TABLE IF NOT EXISTS _migrations (
+      id TEXT PRIMARY KEY,
+      description TEXT,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`, []);
+  } catch (e) {
+    console.error("[migrate] _migrations create failed", e && e.message);
+    return;
+  }
+  _migrationsEnsured = true;
+  let applied = new Set();
+  try {
+    const rows = await dbQuery("SELECT id FROM _migrations", []);
+    for (const r of rows || []) if (r.id) applied.add(r.id);
+  } catch {}
+  for (const m of MIGRATIONS) {
+    if (applied.has(m.id)) continue;
+    console.log(`[migrate] applying ${m.id}: ${m.description}`);
+    try {
+      await m.up(dbQuery);
+      try {
+        await dbQuery("INSERT OR IGNORE INTO _migrations (id, description) VALUES (?, ?)", [m.id, m.description]);
+      } catch {}
+      console.log(`[migrate] applied ${m.id}`);
+    } catch (e) {
+      console.error(`[migrate] failed ${m.id}`, e && e.message);
+    }
+  }
+}
+
 const CREATE_TABLE = `CREATE TABLE IF NOT EXISTS content_items (
-  slug TEXT PRIMARY KEY,
+  slug TEXT NOT NULL,
   type TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'private',
   title TEXT NOT NULL DEFAULT '',
@@ -15,12 +108,10 @@ const CREATE_TABLE = `CREATE TABLE IF NOT EXISTS content_items (
   meta_json TEXT NOT NULL DEFAULT '{}',
   position INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT DEFAULT (datetime('now')),
-  archived_at TEXT
+  archived_at TEXT,
+  PRIMARY KEY (type, slug)
 )`;
 
-// FTS5 full-text search index over content_items.
-// Managed entirely from application code (Turso HTTP doesn't support
-// custom SQL functions needed by triggers). Synced on POST / DELETE.
 const CREATE_FTS = `CREATE VIRTUAL TABLE IF NOT EXISTS content_fts USING fts5(
   slug UNINDEXED,
   type UNINDEXED,
@@ -30,9 +121,6 @@ const CREATE_FTS = `CREATE VIRTUAL TABLE IF NOT EXISTS content_fts USING fts5(
   tokenize='porter unicode61 remove_diacritics 2'
 )`;
 
-// ── Plain-text extraction (JavaScript-side, used for FTS sync) ─────────
-// The body_json field is a JSON content block array. We flatten it to
-// plain text so FTS5 can index it properly.
 function extractPlainText(body) {
   if (typeof body === "string") {
     try { body = JSON.parse(body); } catch { return body; }
@@ -63,11 +151,6 @@ function extractPlainText(body) {
   return parts.join("\n").replace(/\s+/g, " ").trim();
 }
 
-/** Convert a user search string into an FTS5 query.
- *  - Quote-wrapped tokens become exact phrase matches.
- *  - Unquoted tokens get a prefix wildcard (for incremental search).
- *  - Terms are AND-ed (implicit in FTS5).
- */
 function toFtsQuery(input) {
   const trimmed = input.trim();
   if (!trimmed) return "";
@@ -91,16 +174,13 @@ function toFtsQuery(input) {
   return tokens.join(" ");
 }
 
-// ── Pipeline helpers with FTS setup ────────────────────────────────
-// FTS setup runs once per process lifetime: CREATE VIRTUAL TABLE is
-// idempotent. The backfill is done from JavaScript because Turso's HTTP
-// pipeline can't run custom SQL functions that triggers need.
-
 let _ftsInitialized = false;
 let _tablesReady = false;
 
 async function ensureTables() {
   if (_tablesReady) return;
+  try { await dbQuery(CREATE_TABLE); } catch {}
+  await runMigrations();
   try { await dbQuery(CREATE_TABLE); } catch {}
   _tablesReady = true;
 }
@@ -110,7 +190,6 @@ async function query(sql, args) {
   return dbQuery(sql, args);
 }
 
-/** Ensure the FTS table exists and backfill any missing rows. */
 async function initFts() {
   if (_ftsInitialized) return;
   await ensureTables();
@@ -118,7 +197,6 @@ async function initFts() {
     console.error("FTS create error:", e && e.message);
   }
   _ftsInitialized = true;
-  // Backfill only if FTS table is empty.
   try {
     const countRows = await dbQuery("SELECT COUNT(*) AS cnt FROM content_fts", []);
     const existing = countRows && countRows[0] && (countRows[0].cnt ?? countRows[0]["COUNT(*)"] ?? 0);
@@ -143,11 +221,7 @@ async function initFts() {
 }
 
 async function searchQuery(sql, args) {
-  try {
-    await initFts();
-  } catch {
-    return [];
-  }
+  try { await initFts(); } catch { return []; }
   try {
     const rows = await dbQuery(sql, args);
     return rows || [];
@@ -157,7 +231,6 @@ async function searchQuery(sql, args) {
   }
 }
 
-/** Sync a content item into the FTS index. Called from POST handler. */
 async function syncFts(slug, type, title, excerpt, bodyJson) {
   try { await initFts(); } catch { return; }
   const plainBody = extractPlainText(bodyJson);
@@ -166,8 +239,8 @@ async function syncFts(slug, type, title, excerpt, bodyJson) {
       {
         type: "execute",
         stmt: {
-          sql: `INSERT INTO content_fts(content_fts, slug, type, title, excerpt, body) VALUES ('delete', ?, '', '', '', '')`,
-          args: [arg(slug)],
+          sql: `DELETE FROM content_fts WHERE slug = ? AND type = ?`,
+          args: [arg(slug), arg(type)],
         },
       },
       {
@@ -183,25 +256,35 @@ async function syncFts(slug, type, title, excerpt, bodyJson) {
   }
 }
 
-/** Remove a content item from the FTS index. Called from DELETE handler. */
-async function deleteFts(slug) {
+async function deleteFts(slug, type) {
   try { await initFts(); } catch { return; }
   try {
-    await runPipeline([
-      {
-        type: "execute",
-        stmt: {
-          sql: `INSERT INTO content_fts(content_fts, slug, type, title, excerpt, body) VALUES ('delete', ?, '', '', '', '')`,
-          args: [arg(slug)],
+    if (type) {
+      await runPipeline([
+        {
+          type: "execute",
+          stmt: {
+            sql: `DELETE FROM content_fts WHERE slug = ? AND type = ?`,
+            args: [arg(slug), arg(type)],
+          },
         },
-      },
-    ]);
+      ]);
+    } else {
+      await runPipeline([
+        {
+          type: "execute",
+          stmt: {
+            sql: `DELETE FROM content_fts WHERE slug = ?`,
+            args: [arg(slug)],
+          },
+        },
+      ]);
+    }
   } catch (e) {
     console.error("FTS delete error:", e && e.message);
   }
 }
 
-// Registry route base per content type : mirrors src/content/registry.ts
 const ROUTE_BASE = {
   story: "stories",
   guide: "guides",
@@ -217,11 +300,6 @@ const ROUTE_BASE = {
 
 const STATUSES = new Set(["private", "published"]);
 
-// No baseline sync: content is published deliberately via npm run publish-all
-// or the studio UI. The database is the only source the GET path reads.
-
-// Shape matches the registry entries pages already read: full authored
-// object plus computed id/href, so page flips are mechanical.
 function mapRow(r) {
   if (!r) return null;
   let body = {};
@@ -237,8 +315,6 @@ function mapRow(r) {
     title: r.title,
     excerpt: r.excerpt,
     meta,
-    // Registry parity: index.ts injected isFeatured on position 0. The seed
-    // stores that decision in meta; the API surfaces it as a flat field.
     isFeatured: meta.featured === true,
     position: Number(r.position) || 0,
     updatedAt: r.updated_at,
@@ -249,14 +325,18 @@ function mapRow(r) {
 
 export default async function handler(req, res) {
   try {
-    // GET ?slug= : single item. Unauthenticated callers see it only when published.
-    // When ?type= is also given, the row must match it (slugs are unique per
-    // type, not globally).
     if (req.method === "GET" && req.query.slug) {
-      const rows = await query("SELECT * FROM content_items WHERE slug = ?", [req.query.slug]);
+      const slug = req.query.slug;
+      const wantedType = req.query.type;
+      let rows;
+      if (wantedType) {
+        rows = await query("SELECT * FROM content_items WHERE type = ? AND slug = ?", [wantedType, slug]);
+      } else {
+        rows = await query("SELECT * FROM content_items WHERE slug = ? ORDER BY CASE type WHEN 'featured' THEN 0 ELSE 1 END LIMIT 1", [slug]);
+      }
       const row = rows[0];
       if (!row) return res.status(404).json({ error: "Not found" });
-      if (req.query.type && row.type !== req.query.type) {
+      if (wantedType && row.type !== wantedType) {
         return res.status(404).json({ error: "Not found" });
       }
       if (row.status !== "published" && !isAuthed(req)) {
@@ -265,10 +345,6 @@ export default async function handler(req, res) {
       return res.json(mapRow(row));
     }
 
-    // GET ?type= : ordered list. Unauthenticated callers see published only.
-    // With ?q= : FTS5 full-text search over title/excerpt/body, ranked by
-    // relevance. Supports ?type=all for cross-type search. Supports
-    // ?limit=&offset= for pagination.
     if (req.method === "GET" && req.query.type) {
       const authed = isAuthed(req);
       const statusValue = authed && typeof req.query.status === "string" && STATUSES.has(req.query.status)
@@ -281,7 +357,6 @@ export default async function handler(req, res) {
       const offset = Math.max(parseInt(req.query.offset) || 0, 0);
       const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
 
-      // Build type clause: ?type=all searches every type, otherwise filter
       const typeList = req.query.type === "all"
         ? Object.keys(ROUTE_BASE)
         : [req.query.type];
@@ -293,7 +368,7 @@ export default async function handler(req, res) {
         const ftsQuery = toFtsQuery(q);
         const sql = `SELECT ci.*, rank
           FROM content_fts fts
-          JOIN content_items ci ON ci.slug = fts.slug
+          JOIN content_items ci ON ci.type = fts.type AND ci.slug = fts.slug
           WHERE content_fts MATCH ?
             AND ${typeClause}${statusClause}
           ORDER BY rank
@@ -309,16 +384,12 @@ export default async function handler(req, res) {
       return res.json(rows.map(mapRow));
     }
 
-    // GET (no params) : full store for the owner (migration/audit tooling).
     if (req.method === "GET") {
       if (!requireAuth(req, res)) return;
       const rows = await query("SELECT * FROM content_items ORDER BY type ASC, position ASC", []);
       return res.json(rows.map(mapRow));
     }
 
-    // POST : create or replace one item (publish script + studio dialog).
-    // Editing content never flips visibility by accident: an omitted status
-    // keeps the row's current status (new rows default to private).
     if (req.method === "POST") {
       if (!requireAuth(req, res)) return;
       const { slug, type, status, title, excerpt, body, meta, position, updatedAt } = req.body || {};
@@ -327,14 +398,13 @@ export default async function handler(req, res) {
       }
       if (!ROUTE_BASE[type]) return res.status(400).json({ error: "unknown type: " + type });
       if (status && !STATUSES.has(status)) return res.status(400).json({ error: "status must be private|published" });
-      const existing = await query("SELECT status FROM content_items WHERE slug = ?", [slug]);
+      const existing = await query("SELECT status FROM content_items WHERE type = ? AND slug = ?", [type, slug]);
       const effectiveStatus = status || (existing.length && existing[0].status) || "private";
-      // Author backdate support: updatedAt (UTC ISO) wins, else now.
       const now = updatedAt && typeof updatedAt === "string" ? updatedAt : new Date().toISOString();
       const rows = await query(
         `INSERT INTO content_items (slug, type, status, title, excerpt, body_json, meta_json, position, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(slug) DO UPDATE SET type = excluded.type, status = excluded.status,
+         ON CONFLICT(type, slug) DO UPDATE SET status = excluded.status,
            title = excluded.title, excerpt = excluded.excerpt, body_json = excluded.body_json,
            meta_json = excluded.meta_json, position = excluded.position, updated_at = excluded.updated_at
          RETURNING *`,
@@ -345,19 +415,23 @@ export default async function handler(req, res) {
       );
       const row = rows[0];
       if (row) {
-        // Keep FTS index in sync
         await syncFts(slug, type, title || row.title || "", excerpt || row.excerpt || "", body);
       }
       return res.status(201).json(mapRow(row));
     }
 
-    // DELETE ?slug= : owner only. Prefer unpublishing (status=private); this is the hard path.
     if (req.method === "DELETE") {
       if (!requireAuth(req, res)) return;
       const slug = (req.body && req.body.slug) || req.query.slug;
+      const type = (req.body && req.body.type) || req.query.type;
       if (!slug) return res.status(400).json({ error: "slug required" });
-      await query("DELETE FROM content_items WHERE slug = ?", [slug]);
-      await deleteFts(slug);
+      if (type) {
+        await query("DELETE FROM content_items WHERE type = ? AND slug = ?", [type, slug]);
+        await deleteFts(slug, type);
+      } else {
+        await query("DELETE FROM content_items WHERE slug = ?", [slug]);
+        await deleteFts(slug);
+      }
       return res.json({ success: true });
     }
 
