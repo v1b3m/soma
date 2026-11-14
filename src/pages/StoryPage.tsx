@@ -39,6 +39,7 @@ import { collectPriorTurns } from "../../shared/tutor/memory.js";
 import { useScrollLock } from "@/lib/useScrollLock";
 import { buildLessonIndex, resolveSectionAnchors, storyCodePrefix } from "@/lib/storyLinks";
 import SafeImage from "@/components/ui/SafeImage";
+import ContentTestButton from "@/components/ui/ContentTestButton";
 
 interface ModelInfo {
   id: string;
@@ -1037,16 +1038,21 @@ export default function StoryPage() {
                 )}
               </div>
             )}
-            {story.source && (
-              <a
-                href={story.source.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-sm px-md py-sm bg-surface-container-low border border-border-default rounded-lg font-sora text-[10px] uppercase tracking-widest text-on-surface-muted hover:text-primary hover:border-primary/50 transition-colors mb-xxl"
-              >
-                <ExternalLink className="w-3 h-3" />
-                Source: {story.source.name}
-              </a>
+            {story.sources && story.sources.length > 0 && (
+              <div className="flex flex-wrap gap-sm mb-xxl">
+                {story.sources.map((s, si) => (
+                  <a
+                    key={si}
+                    href={s.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-sm px-md py-sm bg-surface-container-low border border-border-default rounded-lg font-sora text-[10px] uppercase tracking-widest text-on-surface-muted hover:text-primary hover:border-primary/50 transition-colors"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    Source: {s.name}
+                  </a>
+                ))}
+              </div>
             )}
           </div>
         </div>
@@ -1374,6 +1380,25 @@ export default function StoryPage() {
               )}
             </div>
             <StarRating storySlug={slug} />
+          </div>
+
+          {/* Quiz me — generate or take test linked to this content */}
+          <div className="mt-md">
+            <ContentTestButton
+              contentText={storyText}
+              contentTitle={story?.title || ""}
+              slug={slug}
+              contentType="story"
+              existingTestSlug={lessonTest?.slug}
+              models={inlineModels}
+              selectedModel={inlineAiModel}
+              selectedProvider={inlineAiProvider}
+              aiReady={inlineAiReady}
+              onModelChange={(m, p) => {
+                setInlineAiModel(m);
+                if (p) setInlineAiProvider(p);
+              }}
+            />
           </div>
         </section>
       )}
