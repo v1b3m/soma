@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Loader2, Sparkles, ArrowRight, AlertCircle,
-  ChevronDown, Lightbulb, FileText, Link,
+  ChevronDown, Lightbulb, FileText, Link, ExternalLink,
 } from "lucide-react";
 import { buildSystemPrompt, buildFormatPrompt, buildMetaPrompt } from "@/lib/admin-prompts";
 import { FALLBACK_COVER } from "@/lib/utils";
@@ -21,6 +22,12 @@ interface AIDraftPanelProps {
   disabled?: boolean;
   initialInput?: string;
   defaultType?: string;
+  /**
+   * When true, the panel auto-triggers generation using the default model as
+   * soon as models and config are loaded. The ModelPicker is hidden and the
+   * input is locked. Use this for the "Generate with AI from note" flow.
+   */
+  autoGenerate?: boolean;
 }
 
 export interface AIDraft {
@@ -64,7 +71,7 @@ export interface AIDraft {
 
 type Mode = "ai-generate" | "format-paste";
 
-export default function AIDraftPanel({ onDraft, disabled, initialInput, defaultType }: AIDraftPanelProps) {
+export default function AIDraftPanel({ onDraft, disabled, initialInput, defaultType, autoGenerate }: AIDraftPanelProps) {
   const [mode, setMode] = useState<Mode>("ai-generate");
   const [input, setInput] = useState(initialInput ?? "");
   const [url, setUrl] = useState("");
@@ -76,23 +83,32 @@ export default function AIDraftPanel({ onDraft, disabled, initialInput, defaultT
   const [modelsReady, setModelsReady] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
+  const navigate = useNavigate();
   const abortRef = useRef<AbortController | null>(null);
+  const autoTriggeredRef = useRef(false);
+  const configErrorRef = useRef(false);
 
   // Sync input when initialInput changes
   useEffect(() => {
     if (initialInput !== undefined) setInput(initialInput);
   }, [initialInput]);
 
-  // Fetch available models on mount
+  // Fetch available models and configured default on mount
   useEffect(() => {
-    fetch("/api/models")
-      .then((r) => r.json())
-      .then((data) => {
-        const list: ModelInfo[] = data.models ?? [];
+    Promise.all([
+      fetch("/api/models").then(r => r.json()),
+      fetch("/api/config").then(r => r.json()).catch(() => ({ defaultModel: null })),
+    ])
+      .then(([modelData, configData]) => {
+        const list: ModelInfo[] = modelData.models ?? [];
         setModels(list);
         setModelsReady(true);
         if (list.length > 0) {
-          const pref = resolveDefaultModel(list, "deepseek-flash");
+          // Priority: configured default → saved pref → first available
+          const configuredDefault = configData?.defaultModel;
+          const pref = configuredDefault && list.some((m) => m.id === configuredDefault)
+            ? configuredDefault
+            : resolveDefaultModel(list, "deepseek-flash");
           const m = pref ? list.find((x) => x.id === pref) : list[0];
           if (m) {
             setSelectedModel(m.id);
@@ -106,6 +122,36 @@ export default function AIDraftPanel({ onDraft, disabled, initialInput, defaultT
       });
   }, []);
 
+  // ── Auto-trigger generation when coming from the note editor ──────────
+  useEffect(() => {
+    if (!autoGenerate || autoTriggeredRef.current) return;
+    if (!modelsReady) return;
+    if (!selectedModel) {
+      setError(
+        "No AI model configured. " +
+        "Set a default model in Settings before generating from a note."
+      );
+      configErrorRef.current = true;
+      setStatus("error");
+      autoTriggeredRef.current = true;
+      return;
+    }
+    if (models.length === 0) {
+      setError(
+        "No AI models available. " +
+        "Check that at least one provider has a valid API key in Settings."
+      );
+      configErrorRef.current = true;
+      setStatus("error");
+      autoTriggeredRef.current = true;
+      return;
+    }
+    if (status !== "idle") return;
+    autoTriggeredRef.current = true;
+    generateWithAI();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoGenerate, modelsReady, selectedModel, status]);
+
   const selected = models.find((m) => m.id === selectedModel && m.provider === selectedProvider);
   const aiUnavailable = !modelsReady || models.length === 0;
 
@@ -115,6 +161,7 @@ export default function AIDraftPanel({ onDraft, disabled, initialInput, defaultT
     if (!input.trim() || disabled || aiUnavailable) return;
     setStatus("generating");
     setError("");
+    configErrorRef.current = false;
     setReasoning("");
     setPreview(null);
 
@@ -420,7 +467,7 @@ export default function AIDraftPanel({ onDraft, disabled, initialInput, defaultT
             onChange={(e) => setInput(e.target.value)}
             placeholder="Describe your idea in plain language... e.g. 'A guide to deploying TypeScript projects on Cloudflare Workers with D1 and R2'"
             className="w-full min-h-[120px] p-lg bg-surface border border-border-default text-on-surface font-dm-sans text-body-base placeholder:text-on-surface-muted focus:outline-none focus:border-primary resize-y"
-            disabled={isBusy || disabled}
+            disabled={isBusy || disabled || autoGenerate}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -429,7 +476,10 @@ export default function AIDraftPanel({ onDraft, disabled, initialInput, defaultT
             }}
           />
           <p className="font-dm-sans text-xs text-on-surface-muted mt-xs">
-            Press {navigator.platform.includes("Mac") ? "Cmd" : "Ctrl"}+Enter to generate
+            {autoGenerate
+              ? "Generating content from your note..."
+              : `Press ${navigator.platform.includes("Mac") ? "Cmd" : "Ctrl"}+Enter to generate`
+            }
           </p>
         </div>
       ) : (
@@ -477,7 +527,7 @@ export default function AIDraftPanel({ onDraft, disabled, initialInput, defaultT
 
       {/* Action row */}
       <div className="flex flex-wrap items-center gap-md">
-        {mode === "ai-generate" && (
+        {mode === "ai-generate" && !autoGenerate && (
           <ModelPicker
             models={models}
             selectedModel={selectedModel}
@@ -580,9 +630,18 @@ export default function AIDraftPanel({ onDraft, disabled, initialInput, defaultT
               {mode === "ai-generate" ? "Generation failed" : "Format failed"}
             </p>
             <p className="font-dm-sans text-xs text-on-surface-muted mt-xs">{error}</p>
+            {autoGenerate && configErrorRef.current && (
+              <button
+                onClick={() => navigate("/settings")}
+                className="mt-sm inline-flex items-center gap-xs font-sora text-xs text-accent-blue-neon hover:underline"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Go to Settings
+              </button>
+            )}
           </div>
           <button
-            onClick={() => setStatus("idle")}
+            onClick={() => { setStatus("idle"); configErrorRef.current = false; }}
             className="font-sora text-xs text-on-surface-muted hover:text-on-surface underline"
           >
             Dismiss
